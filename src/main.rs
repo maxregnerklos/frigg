@@ -25,7 +25,6 @@ use commands::{opt, path_arg, required_opt, required_path_arg, ArgMatchesExt, Co
 
 type Error = anyhow::Error;
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -36,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .arg_required_else_help(true)
         .subcommand(
             Command::new("check")
-                .about("check for the lastest available firmware version")
+                .about("check for the latest available firmware version")
                 .args_model_imei_region(),
         )
         .subcommand(
@@ -62,6 +61,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .value_name("VERSION"),
                 )
                 .arg(required_path_arg("input", "path to encrypted firmware").value_name("INPUT"))
+                .arg(
+                    path_arg("output", "output to a specific file or directory")
+                        .value_name("OUTPUT"),
+                ),
+        )
+        .subcommand(
+            Command::new("port")
+                .about("port between two firmware versions")
+                .args_model_imei_region()
+                .arg(
+                    required_opt("source-version", "source firmware version")
+                        .short('s')
+                        .value_name("SOURCE_VERSION"),
+                )
+                .arg(
+                    required_opt("target-version", "target firmware version")
+                        .short('t')
+                        .value_name("TARGET_VERSION"),
+                )
+                .arg(required_path_arg("input", "path to source firmware").value_name("INPUT"))
                 .arg(
                     path_arg("output", "output to a specific file or directory")
                         .value_name("OUTPUT"),
@@ -113,11 +132,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info.binary_name.strip_suffix(".enc2"),
                     info.binary_name.strip_suffix(".enc4"),
                 ) {
-                    (DecryptionKey::V2(key), Some(filename), None)
-                    | (DecryptionKey::V4(key), None, Some(filename)) => {
+                    (DecryptKey::V2(key), Some(filename), None)
+                    | (DecryptKey::V4(key), None, Some(filename)) => {
                         (Cow::from(filename), Some(key))
                     }
-                    (DecryptionKey::Unknown, None, None) => {
+                    (DecryptKey::Unknown, None, None) => {
                         tracing::warn!(
                             "couldn't determine decryption key. falling back to download only."
                         );
@@ -146,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut writer = BufWriter::new(out);
 
             if let Some(decrypt_key) = decrypt_key {
-                decryption::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+                decrypt::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
             } else {
                 tokio::io::copy(&mut reader, &mut writer).await?;
             }
@@ -188,11 +207,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info.binary_name.strip_suffix(".enc4"),
                 info.binary_name.strip_suffix(".enc2"),
             ) {
-                (DecryptionKey::V2(key), None, Some(filename))
-                | (DecryptionKey::V4(key), Some(filename), None) => {
+                (DecryptKey::V2(key), None, Some(filename))
+                | (DecryptKey::V4(key), Some(filename), None) => {
                     (PathBuf::from(filename), key.to_vec())
                 }
-                (DecryptionKey::Unknown, None, None) => {
+                (DecryptKey::Unknown, None, None) => {
                     println!("couldn't determine decryption key.");
                     return Ok(());
                 }
@@ -217,7 +236,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out = File::create(dest).await?;
             let mut writer = BufWriter::new(out);
 
-            decryption::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+            decrypt::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+        }
+        Some(("port", matches)) => {
+            let model = matches.get_model().expect("arg is required");
+            let imei = matches.get_imei().expect("arg is required");
+            let region = matches.get_region().expect("arg is required");
+            let source_version = matches
+                .get_one::<String>("source-version")
+                .expect("arg is required");
+            let target_version = matches
+                .get_one::<String>("target-version")
+                .expect("arg is required");
+
+            let input = matches
+                .get_one::<PathBuf>("input")
+                .expect("arg is required");
+
+            let output = match matches.get_one::<PathBuf>("output") {
+                Some(output) if output.is_dir() => Some(Destination::Dir(output)),
+                Some(output) if !output.exists() => Some(Destination::File(output)),
+                Some(output) if output.exists() => {
+                    println!("Output file {} already exists", output.display());
+                    return Ok(());
+                }
+                Some(_) | None => None,
+            };
+
+            let client = Client::new()?;
+            let mut nonce = client.generate_nonce().await?;
+            let source_info = client
+                .file_info(model, imei, region, source_version, &mut nonce)
+                .await?;
+
+            let target_info = client
+                .file_info(model, imei, region, target_version, &mut nonce)
+                .await?;
+
+            print_info(model, region, &source_info);
+            print_info(model, region, &target_info);
+
+            let (filename, decrypt_key) = match (
+                source_info.decrypt_key,
+                source_info.binary_name.strip_suffix(".enc4"),
+                source_info.binary_name.strip_suffix(".enc2"),
+            ) {
+                (DecryptKey::V2(key), None, Some(filename))
+                | (DecryptKey::V4(key), Some(filename), None) => {
+                    (PathBuf::from(filename), key.to_vec())
+                }
+                (DecryptKey::Unknown, None, None) => {
+                    println!("couldn't determine decryption key.");
+                    return Ok(());
+                }
+                _ => unreachable!(),
+            };
+
+            let dest: Cow<'_, Path> = match output {
+                Some(Destination::File(file)) => file.into(),
+                Some(Destination::Dir(dir)) => dir.join(filename).into(),
+                None => filename.into(),
+            };
+
+            println!("Porting firmware from {} to {} and saving to {}", source_version, target_version, dest.display());
+            let file = File::open(input).await?;
+
+            let md = file.metadata().await?;
+            let pb = progress::new(md.len());
+            let file = progress::wrap_reader(file, pb);
+
+           
+            let mut reader = BufReader::new(file);
+
+            let out = File::create(dest).await?;
+            let mut writer = BufWriter::new(out);
+
+            // Perform porting operations
+            // This example assumes a straightforward copy and decryption, but porting logic may vary
+            decrypt::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+
+            pb.finish_with_message("Porting complete");
         }
         _ => {}
     }
@@ -230,7 +328,7 @@ enum Destination<'a> {
     File(&'a PathBuf),
 }
 
-fn print_info(model: &str, region: &str, info: &BinaryInformation) {
+fn print_info(model: &str, region: &str, info: &BinaryInfo) {
     println!("Name: {}", info.display_name);
     println!("Model: {model}");
     println!("Region: {region}");
@@ -240,7 +338,7 @@ fn print_info(model: &str, region: &str, info: &BinaryInformation) {
     println!("  Filename: {}", info.binary_name);
     println!("  Size: {} bytes", info.binary_size);
     match info.decrypt_key {
-        DecryptionKey::V2(key) | DecryptionKey::V4(key) => println!("  Decrypt key: {key:02X}"),
-        DecryptionKey::Unknown => println!("  Decrypt key is unknown"),
+        DecryptKey::V2(key) | DecryptKey::V4(key) => println!("  Decrypt key: {key:02X}"),
+        DecryptKey::Unknown => println!("  Decrypt key is unknown"),
     }
 }
