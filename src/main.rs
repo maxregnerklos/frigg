@@ -9,19 +9,19 @@ use tokio::fs::File;
 use tokio::io::{BufReader, BufWriter};
 use tokio_util::io::StreamReader;
 
-mod auth;
-mod binary_info;
+mod authentication;
+mod binary_information;
 mod client;
-mod commands;
-mod decrypt;
+mod custom_commands;
+mod decryption;
 mod progress;
 mod requests;
 mod version;
 mod xml;
 
-use binary_info::{BinaryInfo, DecryptKey};
+use binary_information::{BinaryInformation, DecryptionKey};
 use client::Client;
-use commands::{opt, path_arg, required_opt, required_path_arg, ArgMatchesExt, CommandExt};
+use custom_commands::{opt, path_arg, required_opt, required_path_arg, ArgMatchesExt, CommandExt};
 
 type Error = anyhow::Error;
 
@@ -112,11 +112,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info.binary_name.strip_suffix(".enc2"),
                     info.binary_name.strip_suffix(".enc4"),
                 ) {
-                    (DecryptKey::V2(key), Some(filename), None)
-                    | (DecryptKey::V4(key), None, Some(filename)) => {
+                    (DecryptionKey::V2(key), Some(filename), None)
+                    | (DecryptionKey::V4(key), None, Some(filename)) => {
                         (Cow::from(filename), Some(key))
                     }
-                    (DecryptKey::Unknown, None, None) => {
+                    (DecryptionKey::Unknown, None, None) => {
                         tracing::warn!(
                             "couldn't determine decryption key. falling back to download only."
                         );
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut writer = BufWriter::new(out);
 
             if let Some(decrypt_key) = decrypt_key {
-                decrypt::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+                decryption::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
             } else {
                 tokio::io::copy(&mut reader, &mut writer).await?;
             }
@@ -187,11 +187,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info.binary_name.strip_suffix(".enc4"),
                 info.binary_name.strip_suffix(".enc2"),
             ) {
-                (DecryptKey::V2(key), None, Some(filename))
-                | (DecryptKey::V4(key), Some(filename), None) => {
+                (DecryptionKey::V2(key), None, Some(filename))
+                | (DecryptionKey::V4(key), Some(filename), None) => {
                     (PathBuf::from(filename), key.to_vec())
                 }
-                (DecryptKey::Unknown, None, None) => {
+                (DecryptionKey::Unknown, None, None) => {
                     println!("couldn't determine decryption key.");
                     return Ok(());
                 }
@@ -216,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out = File::create(dest).await?;
             let mut writer = BufWriter::new(out);
 
-            decrypt::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
+            decryption::decrypt(&decrypt_key, &mut reader, &mut writer).await?;
         }
         _ => {}
     }
@@ -229,7 +229,7 @@ enum Destination<'a> {
     File(&'a PathBuf),
 }
 
-fn print_info(model: &str, region: &str, info: &BinaryInfo) {
+fn print_info(model: &str, region: &str, info: &BinaryInformation) {
     println!("Name: {}", info.display_name);
     println!("Model: {model}");
     println!("Region: {region}");
@@ -239,7 +239,7 @@ fn print_info(model: &str, region: &str, info: &BinaryInfo) {
     println!("  Filename: {}", info.binary_name);
     println!("  Size: {} bytes", info.binary_size);
     match info.decrypt_key {
-        DecryptKey::V2(key) | DecryptKey::V4(key) => println!("  Decrypt key: {key:02X}"),
-        DecryptKey::Unknown => println!("  Decrypt key is unknown"),
+        DecryptionKey::V2(key) | DecryptionKey::V4(key) => println!("  Decrypt key: {key:02X}"),
+        DecryptionKey::Unknown => println!("  Decrypt key is unknown"),
     }
 }
