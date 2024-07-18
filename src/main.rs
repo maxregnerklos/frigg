@@ -9,21 +9,22 @@ use tokio::fs::File;
 use tokio::io::{BufReader, BufWriter};
 use tokio_util::io::StreamReader;
 
-mod authentication;
-mod binary_information;
+mod auth;
+mod binary_info;
 mod client;
-mod custom_commands;
-mod decryption;
+mod commands;
+mod decrypt;
 mod progress;
 mod requests;
 mod version;
 mod xml;
 
-use binary_information::{BinaryInformation, DecryptionKey};
+use binary_info::{BinaryInfo, DecryptKey};
 use client::Client;
-use custom_commands::{opt, path_arg, required_opt, required_path_arg, ArgMatchesExt, CommandExt};
+use commands::{opt, path_arg, required_opt, required_path_arg, ArgMatchesExt, CommandExt};
 
 type Error = anyhow::Error;
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
