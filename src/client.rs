@@ -8,7 +8,7 @@ use crate::requests;
 use crate::Error;
 
 const FOTA_BASE_URL: &str = "https://fota-cloud-dn.ospserver.net";
-const FUS_BASE_URL: &str = "https://fusauth.samsung.com"; // Updated URL
+const FUS_BASE_URL: &str = "https://fusauth.samsung.com";
 const DOWNLOAD_BASE_URL: &str = "https://cloud-neofussvr.samsungmobile.com";
 
 pub struct Client {
@@ -19,7 +19,7 @@ impl Client {
     pub fn new() -> Result<Self, Error> {
         let client = reqwest::Client::builder()
             .cookie_store(true)
-            .timeout(std::time::Duration::from_secs(30)) // Enhanced: Added timeout
+            .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
         Ok(Self { inner: client })
@@ -92,7 +92,7 @@ impl Client {
         let resp = self
             .inner
             .get(&url)
-            .header(reqwest::header::AUTHORIZATION, auth)
+            .header(AUTHORIZATION, auth)
             .send()
             .await?
             .error_for_status()?;
@@ -103,7 +103,7 @@ impl Client {
         let basename = filename
             .split_once('.')
             .map(|(s, _)| s)
-            .unwrap_or_else(|| filename);
+            .unwrap_or(filename);
 
         let basename = &basename[basename.len() - 16..];
         let check = calc_logic_check(basename, &nonce.value);
@@ -120,7 +120,7 @@ impl Client {
         data: String,
         nonce: &mut Nonce,
     ) -> Result<Response, Error> {
-        let url = format!("{FUS_BASE_URL}/{path}"); // Updated URL to use FUS_BASE_URL
+        let url = format!("{FUS_BASE_URL}/{path}");
 
         let auth = format!(
             r#"FUS nonce="", signature="{}", type="", nc="", realm="", newauth="1""#,
@@ -129,7 +129,7 @@ impl Client {
         let resp = self
             .inner
             .post(&url)
-            .header(reqwest::header::AUTHORIZATION, auth)
+            .header(AUTHORIZATION, auth)
             .body(data)
             .send()
             .await?;
