@@ -8,7 +8,7 @@ use crate::requests;
 use crate::Error;
 
 const FOTA_BASE_URL: &str = "https://fota-cloud-dn.ospserver.net";
-const FUS_BASE_URL: &str = "https://neofussvr.sslcs.cdngc.net";
+const FUS_BASE_URL: &str = "https://fusauth.samsung.com"; // Updated URL
 const DOWNLOAD_BASE_URL: &str = "https://cloud-neofussvr.samsungmobile.com";
 
 pub struct Client {
@@ -19,6 +19,7 @@ impl Client {
     pub fn new() -> Result<Self, Error> {
         let client = reqwest::Client::builder()
             .cookie_store(true)
+            .timeout(std::time::Duration::from_secs(30)) // Enhanced: Added timeout
             .build()?;
 
         Ok(Self { inner: client })
@@ -26,7 +27,7 @@ impl Client {
 
     pub async fn fetch_version(&self, model: &str, region: &str) -> Result<String, Error> {
         let url = format!("{FOTA_BASE_URL}/firmware/{region}/{model}/version.xml");
-        let resp = self.inner.get(url).send().await?;
+        let resp = self.inner.get(&url).send().await?;
         let xml = resp.error_for_status()?.text().await?;
 
         tracing::debug!(request = "fetch_version", "{xml}");
@@ -38,7 +39,7 @@ impl Client {
         let url = format!("{FUS_BASE_URL}/NF_DownloadGenerateNonce.do");
         let resp = self
             .inner
-            .get(url)
+            .get(&url)
             .header(AUTHORIZATION, r#"FUS newauth="1""#)
             .send()
             .await?;
@@ -90,7 +91,7 @@ impl Client {
         );
         let resp = self
             .inner
-            .get(url)
+            .get(&url)
             .header(reqwest::header::AUTHORIZATION, auth)
             .send()
             .await?
@@ -119,7 +120,7 @@ impl Client {
         data: String,
         nonce: &mut Nonce,
     ) -> Result<Response, Error> {
-        let url = format!("https://neofussvr.sslcs.cdngc.net/{path}");
+        let url = format!("{FUS_BASE_URL}/{path}"); // Updated URL to use FUS_BASE_URL
 
         let auth = format!(
             r#"FUS nonce="", signature="{}", type="", nc="", realm="", newauth="1""#,
@@ -127,7 +128,7 @@ impl Client {
         );
         let resp = self
             .inner
-            .post(url)
+            .post(&url)
             .header(reqwest::header::AUTHORIZATION, auth)
             .body(data)
             .send()
